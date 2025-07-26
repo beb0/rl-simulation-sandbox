@@ -7,7 +7,7 @@ from collections import defaultdict
 # --- Parameters ---
 NUM_AGENTS = 30
 NUM_TRAITS = 5
-NUM_EPISODES = 100
+NUM_EPISODES = 10000
 SIMILARITY_THRESHOLD = 0.7
 AFFINITY_THRESHOLD = 1.5
 EXPLORATION_RATE = 0.2
@@ -82,35 +82,42 @@ for agent in agents:
     agent.choose_group()
 
 # --- Visualization ---
-traits = np.array([agent.traits for agent in agents])
-pca = PCA(n_components=2)
-reduced = pca.fit_transform(traits)
+import networkx as nx
 
-# Assign colors to groups
-colors = {}
-group_ids = sorted(set(a.group for a in agents if a.group is not None))
-color_palette = plt.cm.get_cmap("tab10", len(group_ids))
-for idx, gid in enumerate(group_ids):
-    colors[gid] = color_palette(idx)
+# Build graph
+G = nx.DiGraph()
 
-plt.figure(figsize=(10, 6))
-for i, agent in enumerate(agents):
-    x, y = reduced[i]
-    group_color = colors.get(agent.group, "grey")
-    plt.scatter(x, y, color=group_color, s=100, edgecolor="black")
-    plt.text(x + 0.01, y + 0.01, str(agent.id), fontsize=9)
+# Add nodes
+for agent in agents:
+    G.add_node(agent.id, group=agent.group)
 
-# Optional: Arrows showing who follows whom
-for i, agent in enumerate(agents):
-    if agent.group is not None and agent.group != agent.id:
-        leader_index = agent.group
-        x1, y1 = reduced[i]
-        x2, y2 = reduced[leader_index]
-        plt.arrow(x1, y1, x2 - x1, y2 - y1, color='black', alpha=0.3,
-                  head_width=0.02, length_includes_head=True)
+# Add edges (who follows whom)
+for agent in agents:
+    if agent.group != agent.id:
+        G.add_edge(agent.id, agent.group)
 
-plt.title("Agents grouped by affinity — visualized in personality space")
-plt.xlabel("PCA Dimension 1")
-plt.ylabel("PCA Dimension 2")
-plt.grid(True)
+# Define group colors
+group_ids = sorted(set(a.group for a in agents))
+color_map = plt.cm.get_cmap("tab10", len(group_ids))
+group_color_dict = {gid: color_map(i) for i, gid in enumerate(group_ids)}
+node_colors = [group_color_dict[agent.group] for agent in agents]
+
+# Define node sizes: bigger if they have more followers
+follower_counts = {agent.id: 0 for agent in agents}
+for agent in agents:
+    if agent.group in follower_counts and agent.group != agent.id:
+        follower_counts[agent.group] += 1
+node_sizes = [300 + follower_counts[agent.id] * 150 for agent in agents]
+
+# Layout using spring layout (for social network feel)
+pos = nx.spring_layout(G, seed=42)
+
+# Draw
+plt.figure(figsize=(10, 8))
+nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=node_sizes, edgecolors="black")
+nx.draw_networkx_labels(G, pos, labels={agent.id: str(agent.id) for agent in agents}, font_size=8)
+nx.draw_networkx_edges(G, pos, arrows=True, arrowstyle="-|>", edge_color='gray', alpha=0.5)
+
+plt.title("Agent Group Formation — Network View")
+plt.axis("off")
 plt.show()
