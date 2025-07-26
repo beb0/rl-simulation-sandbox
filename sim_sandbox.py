@@ -1,21 +1,25 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from collections import defaultdict
+from sklearn.decomposition import PCA
 import random
+from collections import defaultdict
 
-# Parameters
-NUM_AGENTS = 20
-NUM_STEPS = 10000
-SIMILARITY_THRESHOLD = 0.6
-AFFINITY_THRESHOLD = 2.0
-EXPLORATION_RATE = 0.2  # 20% of time agents will explore randomly
+# --- Parameters ---
+NUM_AGENTS = 30
+NUM_TRAITS = 5
+NUM_EPISODES = 100
+SIMILARITY_THRESHOLD = 0.7
+AFFINITY_THRESHOLD = 1.5
+EXPLORATION_RATE = 0.2
 
+
+# --- Agent Class ---
 class Agent:
     def __init__(self, id):
         self.id = id
-        self.traits = np.random.rand(5)  # OCEAN traits
-        self.memory = defaultdict(float)  # Trust built through similarity
-        self.q_table = defaultdict(float)  # Q(similarity_level) → expected reward
+        self.traits = np.random.rand(NUM_TRAITS)
+        self.memory = defaultdict(float)
+        self.q_table = defaultdict(float)
         self.group = None
 
     def similarity(self, other):
@@ -33,65 +37,80 @@ class Agent:
         state = (round(sim, 1),)
         old_q = self.q_table[state]
         alpha = 0.1
-        gamma = 0.0  # No future steps here
-        self.q_table[state] = old_q + alpha * (reward + gamma * 0 - old_q)
+        gamma = 0.0
+        self.q_table[state] = old_q + alpha * (reward - old_q)
 
     def choose_who_to_interact_with(self, population):
-        # Exploration: choose a random partner
-        if random.random() < EXPLORATION_RATE:
-            partner = random.choice([a for a in population if a.id != self.id])
-            return partner
+        others = [a for a in population if a.id != self.id]
 
-        # Exploitation: choose agent with similarity closest to best Q
-        similarities = [(other, self.similarity(other)) for other in population if other.id != self.id]
-        if not similarities:
-            return None
+        if random.random() < EXPLORATION_RATE or not self.q_table:
+            return random.choice(others)
 
-        # Choose best similarity level from Q-table
-        if not self.q_table:
-            return random.choice([a for a in population if a.id != self.id])
-        
-        best_level = max(self.q_table.items(), key=lambda x: x[1])[0][0]  # best similarity level
-        # Pick agent whose similarity is closest to best_level
-        best_partner, _ = min(similarities, key=lambda x: abs(x[1] - best_level))
-        return best_partner
+        similarities = [(other, self.similarity(other)) for other in others]
+        choices = []
+        for other, sim in similarities:
+            sim_rounded = round(sim, 1)
+            q_value = self.q_table.get((sim_rounded,), 0)
+            choices.append((other, q_value))
+
+        q_vals = [q for _, q in choices]
+        max_q = max(q_vals)
+        exp_qs = [np.exp(q - max_q) for q in q_vals]
+        sum_exp = sum(exp_qs)
+        probs = [eq / sum_exp for eq in exp_qs]
+        partner = random.choices([c[0] for c in choices], weights=probs, k=1)[0]
+        return partner
 
     def choose_group(self):
         affinities = [(aid, score) for aid, score in self.memory.items() if score > AFFINITY_THRESHOLD]
         if affinities:
             best_friend = max(affinities, key=lambda x: x[1])[0]
             self.group = best_friend
+        else:
+            self.group = self.id  # stays alone if no strong ties
 
 
-# --- Simulation
+# --- Simulation ---
 agents = [Agent(i) for i in range(NUM_AGENTS)]
 
-for step in range(NUM_STEPS):
+for _ in range(NUM_EPISODES):
     for agent in agents:
         partner = agent.choose_who_to_interact_with(agents)
-        if partner:
-            agent.interact(partner)
+        agent.interact(partner)
 
-    # Agents choose groups after enough steps
-    if step > NUM_STEPS // 2:
-        for agent in agents:
-            agent.choose_group()
-
-# --- Visualization
-groups = {}
 for agent in agents:
-    if agent.group is not None:
-        groups.setdefault(agent.group, []).append(agent.id)
+    agent.choose_group()
+
+# --- Visualization ---
+traits = np.array([agent.traits for agent in agents])
+pca = PCA(n_components=2)
+reduced = pca.fit_transform(traits)
+
+# Assign colors to groups
+colors = {}
+group_ids = sorted(set(a.group for a in agents if a.group is not None))
+color_palette = plt.cm.get_cmap("tab10", len(group_ids))
+for idx, gid in enumerate(group_ids):
+    colors[gid] = color_palette(idx)
 
 plt.figure(figsize=(10, 6))
-for group_leader, members in groups.items():
-    x = [agents[i].traits[0] for i in members]
-    y = [agents[i].traits[1] for i in members]
-    plt.scatter(x, y, label=f'Group {group_leader}')
+for i, agent in enumerate(agents):
+    x, y = reduced[i]
+    group_color = colors.get(agent.group, "grey")
+    plt.scatter(x, y, color=group_color, s=100, edgecolor="black")
+    plt.text(x + 0.01, y + 0.01, str(agent.id), fontsize=9)
 
-plt.title("Agents grouped by affinity (via Q-learned preferences)")
-plt.xlabel("Trait 1 (Openness)")
-plt.ylabel("Trait 2 (Conscientiousness)")
-plt.legend()
+# Optional: Arrows showing who follows whom
+for i, agent in enumerate(agents):
+    if agent.group is not None and agent.group != agent.id:
+        leader_index = agent.group
+        x1, y1 = reduced[i]
+        x2, y2 = reduced[leader_index]
+        plt.arrow(x1, y1, x2 - x1, y2 - y1, color='black', alpha=0.3,
+                  head_width=0.02, length_includes_head=True)
+
+plt.title("Agents grouped by affinity — visualized in personality space")
+plt.xlabel("PCA Dimension 1")
+plt.ylabel("PCA Dimension 2")
 plt.grid(True)
 plt.show()
